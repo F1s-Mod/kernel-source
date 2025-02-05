@@ -18,6 +18,7 @@
 #include <crypto/sha.h>
 #include <crypto/skcipher.h>
 #include "fscrypt_private.h"
+#include "fscrypt_ice.h"
 
 static struct crypto_shash *essiv_hash_tfm;
 
@@ -161,11 +162,20 @@ static struct fscrypt_mode available_modes[] = {
 		.keysize = 32,
 		.ivsize = 32,
 	},
+	[FS_ENCRYPTION_MODE_PRIVATE] = {
+		.friendly_name = "ice",
+		.cipher_str = "xts(aes)",
+		.keysize = 64,
+		.ivsize = 16,
+		.inline_encryption = true,
+	},
 };
 
 static struct fscrypt_mode *
 select_encryption_mode(const struct fscrypt_info *ci, const struct inode *inode)
 {
+	struct fscrypt_mode *mode = NULL;
+
 	if (!fscrypt_valid_enc_modes(ci->ci_data_mode, ci->ci_filename_mode)) {
 		fscrypt_warn(inode->i_sb,
 			     "inode %lu uses unsupported encryption modes (contents mode %d, filenames mode %d)",
@@ -174,8 +184,19 @@ select_encryption_mode(const struct fscrypt_info *ci, const struct inode *inode)
 		return ERR_PTR(-EINVAL);
 	}
 
-	if (S_ISREG(inode->i_mode))
-		return &available_modes[ci->ci_data_mode];
+	if (S_ISREG(inode->i_mode)) {
+		mode = &available_modes[ci->ci_data_mode];
+		if (IS_ERR(mode)) {
+			fscrypt_warn(inode->i_sb, "Invalid mode");
+			return ERR_PTR(-EINVAL);
+		}
+		if (mode->inline_encryption &&
+				!fscrypt_is_ice_capable(inode->i_sb)) {
+			fscrypt_warn(inode->i_sb, "ICE support not available");
+			return ERR_PTR(-EINVAL);
+		}
+		return mode;
+	}
 
 	if (S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode))
 		return &available_modes[ci->ci_filename_mode];
@@ -220,6 +241,9 @@ static int find_and_derive_key(const struct inode *inode,
 			memcpy(derived_key, payload->raw, mode->keysize);
 			err = 0;
 		}
+	} else if (mode->inline_encryption) {
+		memcpy(derived_key, payload->raw, mode->keysize);
+		err = 0;
 	} else {
 		err = derive_key_aes(payload->raw, ctx, derived_key,
 				     mode->keysize);
@@ -495,10 +519,19 @@ static void put_crypt_info(struct fscrypt_info *ci)
 	if (ci->ci_master_key) {
 		put_master_key(ci->ci_master_key);
 	} else {
-		crypto_free_skcipher(ci->ci_ctfm);
-		crypto_free_cipher(ci->ci_essiv_tfm);
+		if (ci->ci_ctfm)
+			crypto_free_skcipher(ci->ci_ctfm);
+		if (ci->ci_essiv_tfm)
+			crypto_free_cipher(ci->ci_essiv_tfm);
 	}
+	memset(ci->ci_raw_key, 0, sizeof(ci->ci_raw_key));
 	kmem_cache_free(fscrypt_info_cachep, ci);
+}
+
+static int fscrypt_data_encryption_mode(struct inode *inode)
+{
+	return fscrypt_should_be_processed_by_ice(inode) ?
+	FS_ENCRYPTION_MODE_PRIVATE : FS_ENCRYPTION_MODE_AES_256_XTS;
 }
 
 int fscrypt_get_encryption_info(struct inode *inode)
@@ -509,7 +542,7 @@ int fscrypt_get_encryption_info(struct inode *inode)
 	u8 *raw_key = NULL;
 	int res;
 
-	if (inode->i_crypt_info)
+	if (fscrypt_has_encryption_key(inode))
 		return 0;
 
 	res = fscrypt_initialize(inode->i_sb->s_cop->flags);
@@ -524,7 +557,8 @@ int fscrypt_get_encryption_info(struct inode *inode)
 		/* Fake up a context for an unencrypted directory */
 		memset(&ctx, 0, sizeof(ctx));
 		ctx.format = FS_ENCRYPTION_CONTEXT_FORMAT_V1;
-		ctx.contents_encryption_mode = FS_ENCRYPTION_MODE_AES_256_XTS;
+		ctx.contents_encryption_mode =
+			fscrypt_data_encryption_mode(inode);
 		ctx.filenames_encryption_mode = FS_ENCRYPTION_MODE_AES_256_CTS;
 		memset(ctx.master_key_descriptor, 0x42, FS_KEY_DESCRIPTOR_SIZE);
 	} else if (res != sizeof(ctx)) {
@@ -569,11 +603,15 @@ int fscrypt_get_encryption_info(struct inode *inode)
 	if (res)
 		goto out;
 
-	res = setup_crypto_transform(crypt_info, mode, raw_key, inode);
-	if (res)
-		goto out;
+	if (!mode->inline_encryption) {
+		res = setup_crypto_transform(crypt_info, mode, raw_key, inode);
+		if (res)
+			goto out;
+	} else {
+		memcpy(crypt_info->ci_raw_key, raw_key, mode->keysize);
+	}
 
-	if (cmpxchg(&inode->i_crypt_info, NULL, crypt_info) == NULL)
+	if (cmpxchg_release(&inode->i_crypt_info, NULL, crypt_info) == NULL)
 		crypt_info = NULL;
 out:
 	if (res == -ENOKEY)
@@ -584,9 +622,30 @@ out:
 }
 EXPORT_SYMBOL(fscrypt_get_encryption_info);
 
+/**
+ * fscrypt_put_encryption_info - free most of an inode's fscrypt data
+ *
+ * Free the inode's fscrypt_info.  Filesystems must call this when the inode is
+ * being evicted.  An RCU grace period need not have elapsed yet.
+ */
 void fscrypt_put_encryption_info(struct inode *inode)
 {
 	put_crypt_info(inode->i_crypt_info);
 	inode->i_crypt_info = NULL;
 }
 EXPORT_SYMBOL(fscrypt_put_encryption_info);
+
+/**
+ * fscrypt_free_inode - free an inode's fscrypt data requiring RCU delay
+ *
+ * Free the inode's cached decrypted symlink target, if any.  Filesystems must
+ * call this after an RCU grace period, just before they free the inode.
+ */
+void fscrypt_free_inode(struct inode *inode)
+{
+	if (IS_ENCRYPTED(inode) && S_ISLNK(inode->i_mode)) {
+		kfree(inode->i_link);
+		inode->i_link = NULL;
+	}
+}
+EXPORT_SYMBOL(fscrypt_free_inode);

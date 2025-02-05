@@ -50,7 +50,7 @@
 
 static inline bool ext4_bio_encrypted(struct bio *bio)
 {
-#ifdef CONFIG_EXT4_FS_ENCRYPTION
+#ifdef CONFIG_FS_ENCRYPTION
 	return unlikely(bio->bi_private != NULL);
 #else
 	return false;
@@ -280,10 +280,10 @@ int ext4_mpage_readpages(struct address_space *mapping,
 		}
 		if (bio == NULL) {
 			struct fscrypt_ctx *ctx = NULL;
+			unsigned int flags = 0;
 
-			if (ext4_encrypted_inode(inode) &&
-			    S_ISREG(inode->i_mode)) {
-				ctx = fscrypt_get_ctx(inode, GFP_NOFS);
+			if (IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode)) {
+				ctx = fscrypt_get_ctx(GFP_NOFS);
 				if (IS_ERR(ctx))
 					goto set_error_page;
 			}
@@ -298,8 +298,10 @@ int ext4_mpage_readpages(struct address_space *mapping,
 			bio->bi_iter.bi_sector = blocks[0] << (blkbits - 9);
 			bio->bi_end_io = mpage_end_io;
 			bio->bi_private = ctx;
-			bio_set_op_attrs(bio, REQ_OP_READ,
-						is_readahead ? REQ_RAHEAD : 0);
+			if (is_readahead)
+				flags = flags | REQ_RAHEAD;
+			flags = flags | (ctx ? REQ_NOENCRYPT : 0);
+			bio_set_op_attrs(bio, REQ_OP_READ, flags);
 		}
 
 		length = first_hole << blkbits;
