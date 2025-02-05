@@ -50,6 +50,9 @@ obj-$(CONFIG_SRAM)		+= sram.o
 obj-$(CONFIG_SRAM_EXEC)		+= sram-exec.o
 obj-y				+= mic/
 obj-$(CONFIG_GENWQE)		+= genwqe/
+obj-$(CONFIG_HDCP_QSEECOM)	+= hdcp_qseecom.o
+obj-$(CONFIG_HDCP_QSEECOM)	+= msm_hdcp.o
+obj-$(CONFIG_QSEECOM)		+= qseecom.o
 obj-$(CONFIG_ECHO)		+= echo/
 obj-$(CONFIG_VEXPRESS_SYSCFG)	+= vexpress-syscfg.o
 obj-$(CONFIG_CXL_BASE)		+= cxl/
@@ -59,3 +62,28 @@ obj-$(CONFIG_PCI_ENDPOINT_TEST)	+= pci_endpoint_test.o
 obj-$(CONFIG_OCXL)		+= ocxl/
 obj-$(CONFIG_MISC_RTSX)		+= cardreader/
 obj-$(CONFIG_UID_SYS_STATS)	+= uid_sys_stats.o
+obj-$(CONFIG_MEMORY_STATE_TIME)	+= memory_state_time.o
+
+obj-$(CONFIG_OKL4_USER_VIRQ)	+= okl4-virq.o
+obj-$(CONFIG_OKL4_RINGBUF)	+= okl4-ringbuf.o
+obj-$(CONFIG_TEST_IRQ_REQUESTER) += irq_requester.o
+
+#ifdef VENDOR_EDIT
+# Mengmeng.Wang@SRC.System, 2018/08/28, Add for oiface
+obj-y				+= schedx.o
+#endif
+
+obj-$(CONFIG_OKL4_USER_VIPC)    += okl4-vipc.o
+obj-$(CONFIG_OKL4_GUEST)        += okl4-panic.o
+obj-$(CONFIG_OKL4_LINK_SHBUF)    += okl4-link-shbuf.o
+obj-$(CONFIG_WIGIG_SENSING_SPI)	+= wigig_sensing.o
+obj-$(CONFIG_QTI_XR_SMRTVWR_MISC) += qxr-stdalonevwr.o
+#ifdef HQ_EDIT
+#fingerprint modify
+obj-$(CONFIG_FP_EGIS)		+= fpr_FingerprintCard/
+#endif
+
+#ifdef VENDOR_EDIT
+#Fuchun.Liao@BSP.CHG.Basic, 2018/11/06, Add for oppo rf cable monitor
+obj-$(CONFIG_OPPO_RF_CABLE_MONITOR)	+= oppo_rf_cable_monitor.o
+#endif

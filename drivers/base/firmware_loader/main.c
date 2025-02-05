@@ -50,7 +50,7 @@ struct firmware_cache {
 	struct list_head head;
 	int state;
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_FW_CACHE
 	/*
 	 * Names of firmware images which have been cached successfully
 	 * will be added into the below list so that device uncache
@@ -185,6 +185,7 @@ static struct fw_priv *__allocate_fw_priv(const char *fw_name,
 	fw_priv->data = dbuf;
 	fw_priv->allocated_size = size;
 	fw_state_init(fw_priv);
+	INIT_LIST_HEAD(&fw_priv->list);
 #ifdef CONFIG_FW_LOADER_USER_HELPER
 	INIT_LIST_HEAD(&fw_priv->pending_list);
 #endif
@@ -249,6 +250,10 @@ static void __free_fw_priv(struct kref *ref)
 		 (unsigned int)fw_priv->size);
 
 	list_del(&fw_priv->list);
+#ifdef CONFIG_FW_LOADER_USER_HELPER
+	list_del(&fw_priv->pending_list);
+#endif
+
 	spin_unlock(&fwc->lock);
 
 #ifdef CONFIG_FW_LOADER_USER_HELPER
@@ -281,7 +286,8 @@ static const char * const fw_path[] = {
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
-	"/lib/firmware"
+	"/lib/firmware",
+	"/system/vendor/firmware"
 };
 
 /*
@@ -292,8 +298,15 @@ static const char * const fw_path[] = {
 module_param_string(path, fw_path_para, sizeof(fw_path_para), 0644);
 MODULE_PARM_DESC(path, "customized firmware image search path with a higher priority than default path");
 
+#ifdef VENDOR_EDIT
+//Wenjie.Zhong@PSW.BSP.Tp, 2020-05-15, Add to avoid direct pass encrypt tp firmware to driver
+static int fw_get_filesystem_firmware(struct device *device,
+					struct fw_priv *fw_priv,
+					enum fw_opt opt_flags)
+#else
 static int
 fw_get_filesystem_firmware(struct device *device, struct fw_priv *fw_priv)
+#endif /*VENDOR_EDIT*/
 {
 	loff_t size;
 	int i, len;
@@ -301,6 +314,14 @@ fw_get_filesystem_firmware(struct device *device, struct fw_priv *fw_priv)
 	char *path;
 	enum kernel_read_file_id id = READING_FIRMWARE;
 	size_t msize = INT_MAX;
+
+#ifdef VENDOR_EDIT
+	//Wenjie.Zhong@PSW.BSP.Tp, 2020-05-15, Add to avoid direct pass encrypt tp firmware to driver
+	if(opt_flags & FW_OPT_COMPARE) {
+		pr_err("%s opt_flags get FW_OPT_COMPARE!\n", __func__);
+		return rc;
+	}
+#endif/*VENDOR_EDIT*/
 
 	/* Already populated data member means we're loading into a buffer */
 	if (fw_priv->data) {
@@ -372,7 +393,7 @@ static void fw_set_page_data(struct fw_priv *fw_priv, struct firmware *fw)
 		 (unsigned int)fw_priv->size);
 }
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_FW_CACHE
 static void fw_name_devm_release(struct device *dev, void *res)
 {
 	struct fw_name_devm *fwn = res;
@@ -584,11 +605,16 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 	if (ret <= 0) /* error or already assigned */
 		goto out;
 
+#ifdef VENDOR_EDIT
+//Wenjie.Zhong@PSW.BSP.Tp, 2020-05-15, Add to avoid direct pass encrypt tp firmware to driver
+	ret = fw_get_filesystem_firmware(device, fw->priv, opt_flags);
+#else
 	ret = fw_get_filesystem_firmware(device, fw->priv);
+#endif/*VENDOR_EDIT*/
 	if (ret) {
 		if (!(opt_flags & FW_OPT_NO_WARN))
-			dev_warn(device,
-				 "Direct firmware load for %s failed with error %d\n",
+			dev_dbg(device,
+				 "Firmware %s was not found in kernel paths. rc:%d\n",
 				 name, ret);
 		ret = firmware_fallback_sysfs(fw, name, device, opt_flags, ret);
 	} else
@@ -639,6 +665,23 @@ request_firmware(const struct firmware **firmware_p, const char *name,
 	return ret;
 }
 EXPORT_SYMBOL(request_firmware);
+
+#ifdef VENDOR_EDIT
+//Wenjie.Zhong@PSW.BSP.Tp, 2020-05-15, Add interface to get proper fw
+int request_firmware_select(const struct firmware **firmware_p, const char *name,
+		 struct device *device)
+{
+	int ret;
+
+	/* Need to pin this module until return */
+	__module_get(THIS_MODULE);
+	ret = _request_firmware(firmware_p, name, device, NULL, 0,
+				FW_OPT_UEVENT | FW_OPT_COMPARE);
+	module_put(THIS_MODULE);
+	return ret;
+}
+EXPORT_SYMBOL(request_firmware_select);
+#endif/*VENDOR_EDIT*/
 
 /**
  * firmware_request_nowarn() - request for an optional fw module
@@ -856,7 +899,7 @@ request_firmware_nowait(
 }
 EXPORT_SYMBOL(request_firmware_nowait);
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_FW_CACHE
 static ASYNC_DOMAIN_EXCLUSIVE(fw_cache_domain);
 
 /**

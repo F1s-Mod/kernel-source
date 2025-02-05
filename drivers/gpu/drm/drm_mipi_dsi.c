@@ -35,6 +35,11 @@
 
 #include <video/mipi_display.h>
 
+#ifdef VENDOR_EDIT
+/* Zhibin.Pan@MM.Display.Driver.Stability. 2020/08/17 */
+extern int himax_backlight_off;
+#endif
+
 /**
  * DOC: dsi helpers
  *
@@ -360,6 +365,7 @@ static ssize_t mipi_dsi_device_transfer(struct mipi_dsi_device *dsi,
 
 	if (dsi->mode_flags & MIPI_DSI_MODE_LPM)
 		msg->flags |= MIPI_DSI_MSG_USE_LPM;
+	msg->flags |= MIPI_DSI_MSG_LASTCOMMAND;
 
 	return ops->transfer(dsi->host, msg);
 }
@@ -456,7 +462,7 @@ int mipi_dsi_create_packet(struct mipi_dsi_packet *packet,
 		return -EINVAL;
 
 	memset(packet, 0, sizeof(*packet));
-	packet->header[0] = ((msg->channel & 0x3) << 6) | (msg->type & 0x3f);
+	packet->header[2] = ((msg->channel & 0x3) << 6) | (msg->type & 0x3f);
 
 	/* TODO: compute ECC if hardware support is not available */
 
@@ -468,16 +474,16 @@ int mipi_dsi_create_packet(struct mipi_dsi_packet *packet,
 	 * and 2.
 	 */
 	if (mipi_dsi_packet_format_is_long(msg->type)) {
-		packet->header[1] = (msg->tx_len >> 0) & 0xff;
-		packet->header[2] = (msg->tx_len >> 8) & 0xff;
+		packet->header[0] = (msg->tx_len >> 0) & 0xff;
+		packet->header[1] = (msg->tx_len >> 8) & 0xff;
 
 		packet->payload_length = msg->tx_len;
 		packet->payload = msg->tx_buf;
 	} else {
 		const u8 *tx = msg->tx_buf;
 
-		packet->header[1] = (msg->tx_len > 0) ? tx[0] : 0;
-		packet->header[2] = (msg->tx_len > 1) ? tx[1] : 0;
+		packet->header[0] = (msg->tx_len > 0) ? tx[0] : 0;
+		packet->header[1] = (msg->tx_len > 1) ? tx[1] : 0;
 	}
 
 	packet->size = sizeof(packet->header) + packet->payload_length;
@@ -1054,11 +1060,44 @@ EXPORT_SYMBOL(mipi_dsi_dcs_set_tear_scanline);
  *
  * Return: 0 on success or a negative error code on failure.
  */
+
+#ifdef ODM_HQ_EDIT
+/* Xiaojun.Lv@MM.Lcd.Driver, 2020/05/19, Add for backlight compatiblity */
+extern char *saved_command_line;
+#endif
+
 int mipi_dsi_dcs_set_display_brightness(struct mipi_dsi_device *dsi,
 					u16 brightness)
 {
-	u8 payload[2] = { brightness & 0xff, brightness >> 8 };
 	ssize_t err;
+#ifdef ODM_HQ_EDIT
+/* Xiaojun.Lv@MM.Lcd.Driver, 2020/06/14, Add for backlight compatiblity */
+	u8 payload[2] = {0};
+	payload[0] = (brightness & 0xfff) >> 8;
+	payload[1] = brightness & 0xff;
+#else
+	u8 payload[2] = { brightness & 0xff, brightness >> 8 };
+#endif
+
+    #ifdef VENDOR_EDIT
+	/* Zhibin.Pan@MM.Display.Driver.Stability. 2020/08/17, make sure MIPI is powered off before backlight when suspend and power off */
+	if (strstr(saved_command_line, "mdss_dsi_hx83112a_tm_90hz_video") && brightness == 0 && himax_backlight_off == 1) {
+		payload[0] = 0x24;
+		err = mipi_dsi_dcs_write(dsi, MIPI_DCS_WRITE_CONTROL_DISPLAY,
+				 payload, 1);
+		if (err < 0)
+			printk("write MIPI_DCS_WRITE_CONTROL_DISPLAY error\n");
+		payload[0] = 0x00;
+		payload[1] = 0x00;
+		err = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_CABC_MIN_BRIGHTNESS,
+				 payload, sizeof(payload));
+		if (err < 0)
+			printk("write MIPI_DCS_SET_CABC_MIN_BRIGHTNESS error\n");
+
+		himax_backlight_off=0;
+		pr_err("dimming off and himax_backlight_off = %d\n",himax_backlight_off);
+	}
+    #endif
 
 	err = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
 				 payload, sizeof(payload));

@@ -6,7 +6,7 @@
 # Each configuration option enables a list of files.
 
 obj-$(CONFIG_INPUT)		+= input-core.o
-input-core-y := input.o input-compat.o input-mt.o ff-core.o
+input-core-y := input.o input-compat.o input-mt.o ff-core.o event_notify.o
 
 obj-$(CONFIG_INPUT_FF_MEMLESS)	+= ff-memless.o
 obj-$(CONFIG_INPUT_POLLDEV)	+= input-polldev.o
@@ -27,5 +27,18 @@ obj-$(CONFIG_INPUT_TOUCHSCREEN)	+= touchscreen/
 obj-$(CONFIG_INPUT_MISC)	+= misc/
 
 obj-$(CONFIG_INPUT_APMPOWER)	+= apm-power.o
+obj-$(CONFIG_INPUT_KEYRESET)	+= keyreset.o
+obj-$(CONFIG_INPUT_KEYCOMBO)	+= keycombo.o
 
 obj-$(CONFIG_RMI4_CORE)		+= rmi4/
+
+#ifdef VENDOR_EDIT
+#Ping.Liu@BSP.Fingerprint.Secure, 2018/06/22, Add for oppo secure common.
+obj-y += oppo_seccommon_drivers/
+#endif
+
+#ifdef HQ_EDIT
+#fingerprint add
+obj-$(CONFIG_OPPO_FINGERPRINT)	+= oppo_fp_drivers/
+#endif
+

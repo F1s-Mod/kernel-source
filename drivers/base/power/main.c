@@ -128,9 +128,19 @@ void device_pm_add(struct device *dev)
 		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
 	device_pm_check_callbacks(dev);
 	mutex_lock(&dpm_list_mtx);
+#ifndef VENDOR_EDIT
+	//Nanwei.Deng@BSP.CHG.Basic 2018/05/03 modify for power debug
 	if (dev->parent && dev->parent->power.is_prepared)
 		dev_warn(dev, "parent %s should not be sleeping\n",
 			dev_name(dev->parent));
+#else
+	if (dev->parent && dev->parent->power.is_prepared) {
+		dev_warn(dev, "parent %s should not be sleeping\n",
+			dev_name(dev->parent));
+		pr_info("debug Adding info for %s:%s\n",
+		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
+	}
+#endif /* VENDOR_EDIT */
 	list_add_tail(&dev->power.entry, &dpm_list);
 	dev->power.in_dpm_list = true;
 	mutex_unlock(&dpm_list_mtx);
@@ -1730,6 +1740,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		pm_wakeup_event(dev, 0);
 
 	if (pm_wakeup_pending()) {
+		pm_get_active_wakeup_sources(suspend_abort,
+			MAX_SUSPEND_ABORT_LEN);
+		log_suspend_abort_reason(suspend_abort);
 		dev->power.direct_complete = false;
 		pm_get_active_wakeup_sources(suspend_abort,
 			MAX_SUSPEND_ABORT_LEN);
