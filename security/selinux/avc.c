@@ -33,6 +33,10 @@
 #include "avc.h"
 #include "avc_ss.h"
 #include "classmap.h"
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SELinux, 2018/01/13, Add for disable selinux denied logs in MP version
+#include "proc.h"
+#endif /* VENDOR_EDIT */
 
 #define AVC_CACHE_SLOTS			512
 #define AVC_DEF_CACHE_THRESHOLD		512
@@ -366,26 +370,27 @@ static struct avc_xperms_decision_node
 	struct avc_xperms_decision_node *xpd_node;
 	struct extended_perms_decision *xpd;
 
-	xpd_node = kmem_cache_zalloc(avc_xperms_decision_cachep, GFP_NOWAIT);
+	xpd_node = kmem_cache_zalloc(avc_xperms_decision_cachep,
+			GFP_NOWAIT | __GFP_NOWARN);
 	if (!xpd_node)
 		return NULL;
 
 	xpd = &xpd_node->xpd;
 	if (which & XPERMS_ALLOWED) {
 		xpd->allowed = kmem_cache_zalloc(avc_xperms_data_cachep,
-						GFP_NOWAIT);
+						GFP_NOWAIT | __GFP_NOWARN);
 		if (!xpd->allowed)
 			goto error;
 	}
 	if (which & XPERMS_AUDITALLOW) {
 		xpd->auditallow = kmem_cache_zalloc(avc_xperms_data_cachep,
-						GFP_NOWAIT);
+						GFP_NOWAIT | __GFP_NOWARN);
 		if (!xpd->auditallow)
 			goto error;
 	}
 	if (which & XPERMS_DONTAUDIT) {
 		xpd->dontaudit = kmem_cache_zalloc(avc_xperms_data_cachep,
-						GFP_NOWAIT);
+						GFP_NOWAIT | __GFP_NOWARN);
 		if (!xpd->dontaudit)
 			goto error;
 	}
@@ -413,7 +418,8 @@ static struct avc_xperms_node *avc_xperms_alloc(void)
 {
 	struct avc_xperms_node *xp_node;
 
-	xp_node = kmem_cache_zalloc(avc_xperms_cachep, GFP_NOWAIT);
+	xp_node = kmem_cache_zalloc(avc_xperms_cachep,
+			GFP_NOWAIT | __GFP_NOWARN);
 	if (!xp_node)
 		return xp_node;
 	INIT_LIST_HEAD(&xp_node->xpd_head);
@@ -569,7 +575,7 @@ static struct avc_node *avc_alloc_node(struct selinux_avc *avc)
 {
 	struct avc_node *node;
 
-	node = kmem_cache_zalloc(avc_node_cachep, GFP_NOWAIT);
+	node = kmem_cache_zalloc(avc_node_cachep, GFP_NOWAIT | __GFP_NOWARN);
 	if (!node)
 		goto out;
 
@@ -689,40 +695,38 @@ static struct avc_node *avc_insert(struct selinux_avc *avc,
 	struct avc_node *pos, *node = NULL;
 	int hvalue;
 	unsigned long flag;
+	spinlock_t *lock;
+	struct hlist_head *head;
 
 	if (avc_latest_notif_update(avc, avd->seqno, 1))
-		goto out;
+		return NULL;
 
 	node = avc_alloc_node(avc);
-	if (node) {
-		struct hlist_head *head;
-		spinlock_t *lock;
-		int rc = 0;
+	if (!node)
+		return NULL;
 
-		hvalue = avc_hash(ssid, tsid, tclass);
-		avc_node_populate(node, ssid, tsid, tclass, avd);
-		rc = avc_xperms_populate(node, xp_node);
-		if (rc) {
-			kmem_cache_free(avc_node_cachep, node);
-			return NULL;
-		}
-		head = &avc->avc_cache.slots[hvalue];
-		lock = &avc->avc_cache.slots_lock[hvalue];
-
-		spin_lock_irqsave(lock, flag);
-		hlist_for_each_entry(pos, head, list) {
-			if (pos->ae.ssid == ssid &&
-			    pos->ae.tsid == tsid &&
-			    pos->ae.tclass == tclass) {
-				avc_node_replace(avc, node, pos);
-				goto found;
-			}
-		}
-		hlist_add_head_rcu(&node->list, head);
-found:
-		spin_unlock_irqrestore(lock, flag);
+	avc_node_populate(node, ssid, tsid, tclass, avd);
+	if (avc_xperms_populate(node, xp_node)) {
+		avc_node_kill(avc, node);
+		return NULL;
 	}
-out:
+
+	hvalue = avc_hash(ssid, tsid, tclass);
+	head = &avc->avc_cache.slots[hvalue];
+	lock = &avc->avc_cache.slots_lock[hvalue];
+	spin_lock_irqsave(lock, flag);
+	hlist_for_each_entry(pos, head, list) {
+		if (pos->ae.ssid == ssid &&
+		    pos->ae.tsid == tsid &&
+		    pos->ae.tclass == tclass) {
+			avc_node_replace(avc, node, pos);
+			goto found;
+		}
+	}
+
+	hlist_add_head_rcu(&node->list, head);
+found:
+	spin_unlock_irqrestore(lock, flag);
 	return node;
 }
 
@@ -771,6 +775,12 @@ noinline int slow_avc_audit(struct selinux_state *state,
 {
 	struct common_audit_data stack_data;
 	struct selinux_audit_data sad;
+
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SELinux, 2018/01/13, Add for disable selinux denied logs in MP version
+	if (!is_avc_audit_enable())
+		return 0;
+#endif /* VENDOR_EDIT */
 
 	if (!a) {
 		a = &stack_data;
@@ -913,7 +923,7 @@ static int avc_update_node(struct selinux_avc *avc,
 	if (orig->ae.xp_node) {
 		rc = avc_xperms_populate(node, orig->ae.xp_node);
 		if (rc) {
-			kmem_cache_free(avc_node_cachep, node);
+			avc_node_kill(avc, node);
 			goto out_unlock;
 		}
 	}
@@ -1044,6 +1054,39 @@ static noinline int avc_denied(struct selinux_state *state,
 	return 0;
 }
 
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SELinux, 2017/11/03, add for skip rutilsdaemon
+static int get_security_context(struct selinux_state *state, u32 sid, char **context)
+{
+	u32 context_len;
+	return security_sid_to_context(state, sid, context, &context_len);
+}
+
+int is_oppo_permissive(struct selinux_state *state, u32 ssid, u32 tsid, u32 requested)
+{
+	char *scontext;
+	int rc = 0;
+
+	if (current->flags & PF_KTHREAD)
+		return 0;
+
+	if (0 != from_kuid(&init_user_ns, current_uid()) &&
+			1000 != from_kuid(&init_user_ns, current_uid()))
+		return 0;
+
+	rc = get_security_context(state, ssid, &scontext);
+	if (!rc) {
+		if (strstr(scontext, "rutilsdaemon")) {
+			kfree(scontext);
+			return 1;
+		}
+		kfree(scontext);
+	}
+
+	return 0;
+}
+#endif /* VENDOR_EDIT */
+
 /*
  * The avc extended permissions logic adds an additional 256 bits of
  * permissions to an avc node when extended permissions for that node are
@@ -1066,6 +1109,12 @@ int avc_has_extended_perms(struct selinux_state *state,
 	struct avc_xperms_node local_xp_node;
 	struct avc_xperms_node *xp_node;
 	int rc = 0, rc2;
+
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SELinux, 2017/11/03, add for skip rutilsdaemon
+	if (is_oppo_permissive(state, ssid, tsid, requested))
+		return 0;
+#endif /* VENDOR_EDIT */
 
 	xp_node = &local_xp_node;
 	BUG_ON(!requested);
@@ -1199,6 +1248,12 @@ int avc_has_perm(struct selinux_state *state, u32 ssid, u32 tsid, u16 tclass,
 	struct av_decision avd;
 	int rc, rc2;
 
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SELinux, 2017/11/03, add for skip rutilsdaemon
+        if (is_oppo_permissive(state, ssid, tsid, requested))
+                return 0;
+#endif /* VENDOR_EDIT */
+
 	rc = avc_has_perm_noaudit(state, ssid, tsid, tclass, requested, 0,
 				  &avd);
 
@@ -1216,6 +1271,12 @@ int avc_has_perm_flags(struct selinux_state *state,
 {
 	struct av_decision avd;
 	int rc, rc2;
+
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SELinux, 2017/11/03, add for skip rutilsdaemon
+        if (is_oppo_permissive(state, ssid, tsid, requested))
+                return 0;
+#endif /* VENDOR_EDIT */
 
 	rc = avc_has_perm_noaudit(state, ssid, tsid, tclass, requested,
 				  (flags & MAY_NOT_BLOCK) ? AVC_NONBLOCKING : 0,
