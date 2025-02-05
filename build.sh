@@ -1,74 +1,23 @@
-#!/bin/bash
 
-#set -e
+#sudo apt-get update
+#sudo apt-get install -y build-essential bc curl git zip ftp gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev lftp zstd wget libfl-dev python3 libarchive-tools device-tree-compiler zsh
 
-## Copy this script inside the kernel directory
-KERNEL_DEFCONFIG=vendor/citrus_defconfig
-ANYKERNEL3_DIR=$PWD/AnyKernel3/
-FINAL_KERNEL_ZIP=Optimus_Drunk_Citrus_v1.zip
-export PATH="$KERNELDIR/prebuilts/proton-clang/bin:${PATH}"
-export ARCH=arm64
-export SUBARCH=arm64
-export KBUILD_COMPILER_STRING="$($KERNELDIR/prebuilts/proton-clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
-# Speed up build process
-MAKE="./makeparallel"
+#git clone https://github.com/1ndev-ui/android_prebuilts_clang_host_linux-x86_clang-6443078 -b 11.0.1 ../clang --depth=1
+#git clone https://android.googlesource.com/platform/prebuilts/gas/linux-x86 -b master ../gas --depth=1
 
-BUILD_START=$(date +"%s")
-blue='\033[0;34m'
-cyan='\033[0;36m'
-yellow='\033[0;33m'
-red='\033[0;31m'
-nocol='\033[0m'
+DEFCONFIG="RMX2195_defconfig"
+ARCH=arm64
+CROSS_COMPILE=aarch64-linux-gnu-
+CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+CLANG_TRIPLE=aarch64-linux-gnu-
+AR=
+CC=clang
 
-# Clean build always lol
-echo "**** Cleaning ****"
+GAS="$(pwd)/../gas"
+TC_DIR="$(pwd)/../clang"
+export PATH="$TC_DIR/bin:$PATH:$TC_DIR/:$PATH:$GAS/bin:$PATH:$GAS/:$PATH"
+
 mkdir -p out
-make O=out clean
-
-echo "**** Kernel defconfig is set to $KERNEL_DEFCONFIG ****"
-echo -e "$blue***********************************************"
-echo "          BUILDING KERNEL          "
-echo -e "***********************************************$nocol"
-make $KERNEL_DEFCONFIG O=out
-make -j$(nproc --all) O=out \
-                      ARCH=arm64 \
-                      CC=clang \
-                      CROSS_COMPILE=aarch64-linux-gnu- \
-                      CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-                      NM=llvm-nm \
-                      OBJCOPY=llvm-objcopy \
-                      OBJDUMP=llvm-objdump \
-                      STRIP=llvm-strip
-
-echo "**** Verify Image.gz-dtb & dtbo.img ****"
-ls $PWD/out/arch/arm64/boot/Image.gz-dtb
-ls $PWD/out/arch/arm64/boot/dtbo.img
-
-# Anykernel 3 time!!
-echo "**** Verifying AnyKernel3 Directory ****"
-ls $ANYKERNEL3_DIR
-echo "**** Removing leftovers ****"
-rm -rf $ANYKERNEL3_DIR/Image.gz-dtb
-rm -rf $ANYKERNEL3_DIR/dtbo.img
-rm -rf $ANYKERNEL3_DIR/$FINAL_KERNEL_ZIP
-
-echo "**** Copying Image.gz-dtb & dtbo.img ****"
-cp $PWD/out/arch/arm64/boot/Image.gz-dtb $ANYKERNEL3_DIR/
-cp $PWD/out/arch/arm64/boot/dtbo.img $ANYKERNEL3_DIR/
-
-echo "**** Time to zip up! ****"
-cd $ANYKERNEL3_DIR/
-zip -r9 $FINAL_KERNEL_ZIP * -x README $FINAL_KERNEL_ZIP
-cp $ANYKERNEL3_DIR/$FINAL_KERNEL_ZIP $KERNELDIR/$FINAL_KERNEL_ZIP
-
-echo "**** Done, here is your sha1 ****"
-cd ..
-rm -rf $ANYKERNEL3_DIR/$FINAL_KERNEL_ZIP
-rm -rf $ANYKERNEL3_DIR/Image.gz-dtb
-rm -rf $ANYKERNEL3_DIR/dtbo.img
-rm -rf out/
-
-BUILD_END=$(date +"%s")
-DIFF=$(($BUILD_END - $BUILD_START))
-echo -e "$yellow Build completed in $(($DIFF / 60)) minute(s) and $(($DIFF % 60)) seconds.$nocol"
-sha1sum $KERNELDIR/$FINAL_KERNEL_ZIP
+make O=out ARCH=arm64 CC=clang AR= CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CROSS_COMPILE_ARM32=arm-linux-gnueabi-  CLANG_TRIPLE=aarch64-linux-gnu- $DEFCONFIG
+make -j$(nproc --all) O=out ARCH=arm64 CC=clang AR= CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CROSS_COMPILE_ARM32=arm-linux-gnueabi-  CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_DEBUG_SECTION_MISMATCH=y
