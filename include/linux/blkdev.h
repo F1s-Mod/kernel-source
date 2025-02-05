@@ -155,18 +155,30 @@ struct request {
 	unsigned int cmd_flags;		/* op and common flags */
 	req_flags_t rq_flags;
 
+/* chenweijian@TECH.Storage.IOMonitor, add for statistical IO time-consuming distribution, 2020/02/18 */
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_IOMONITOR)
+		ktime_t req_tg;
+		ktime_t req_ti;
+		ktime_t req_td;
+		ktime_t req_tc;
+#endif
+/* VENDOR_EDIT */
 	int internal_tag;
 
 	/* the following two fields are internal, NEVER access directly */
 	unsigned int __data_len;	/* total data len */
 	int tag;
 	sector_t __sector;		/* sector cursor */
+	u64 __dun;			/* dun for UFS */
 
 	struct bio *bio;
 	struct bio *biotail;
 
 	struct list_head queuelist;
-
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_FG_IO_OPT)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-23,add foreground io opt*/
+	struct list_head fg_list;
+#endif /*VENDOR_EDIT*/
 	/*
 	 * The hash is used inside the scheduler, and killed once the
 	 * request reaches the dispatch list. The ipi_list is only used
@@ -435,6 +447,14 @@ struct request_queue {
 	 * Together with queue_head for cacheline sharing
 	 */
 	struct list_head	queue_head;
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_FG_IO_OPT)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-23,add foreground io opt*/
+	struct list_head	fg_head;
+	int fg_count;
+	int both_count;
+	int fg_count_max;
+	int both_count_max;
+#endif /*VENDOR_EDIT*/
 	struct request		*last_merge;
 	struct elevator_queue	*elevator;
 	int			nr_rqs[2];	/* # allocated [a]sync rqs */
@@ -704,6 +724,7 @@ struct request_queue {
 #define QUEUE_FLAG_REGISTERED  26	/* queue has been registered to a disk */
 #define QUEUE_FLAG_SCSI_PASSTHROUGH 27	/* queue supports SCSI commands */
 #define QUEUE_FLAG_QUIESCED    28	/* queue has been quiesced */
+#define QUEUE_FLAG_INLINECRYPT 29	/* inline encryption support */
 
 #define QUEUE_FLAG_DEFAULT	((1 << QUEUE_FLAG_IO_STAT) |		\
 				 (1 << QUEUE_FLAG_SAME_COMP)	|	\
@@ -736,6 +757,8 @@ bool blk_queue_flag_test_and_clear(unsigned int flag, struct request_queue *q);
 #define blk_queue_dax(q)	test_bit(QUEUE_FLAG_DAX, &(q)->queue_flags)
 #define blk_queue_scsi_passthrough(q)	\
 	test_bit(QUEUE_FLAG_SCSI_PASSTHROUGH, &(q)->queue_flags)
+#define blk_queue_inlinecrypt(q) \
+	test_bit(QUEUE_FLAG_INLINECRYPT, &(q)->queue_flags)
 
 #define blk_noretry_request(rq) \
 	((rq)->cmd_flags & (REQ_FAILFAST_DEV|REQ_FAILFAST_TRANSPORT| \
@@ -880,6 +903,24 @@ static inline unsigned int blk_queue_depth(struct request_queue *q)
 		return q->queue_depth;
 
 	return q->nr_requests;
+}
+
+static inline void queue_flag_set_unlocked(unsigned int flag,
+					   struct request_queue *q)
+{
+	if (test_bit(QUEUE_FLAG_INIT_DONE, &q->queue_flags) &&
+	    kref_read(&q->kobj.kref))
+		lockdep_assert_held(q->queue_lock);
+	__set_bit(flag, &q->queue_flags);
+}
+
+static inline void queue_flag_clear_unlocked(unsigned int flag,
+		                         struct request_queue *q)
+{
+	    if (test_bit(QUEUE_FLAG_INIT_DONE, &q->queue_flags) &&
+				        kref_read(&q->kobj.kref))
+			        lockdep_assert_held(q->queue_lock);
+		    __clear_bit(flag, &q->queue_flags);
 }
 
 /*
@@ -1045,6 +1086,11 @@ static inline struct request_queue *bdev_get_queue(struct block_device *bdev)
 static inline sector_t blk_rq_pos(const struct request *rq)
 {
 	return rq->__sector;
+}
+
+static inline sector_t blk_rq_dun(const struct request *rq)
+{
+	return rq->__dun;
 }
 
 static inline unsigned int blk_rq_bytes(const struct request *rq)

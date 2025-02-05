@@ -151,6 +151,14 @@ struct cpufreq_policy {
 
 	/* For cpufreq driver's internal use */
 	void			*driver_data;
+#ifdef OPLUS_FEATURE_HEALTHINFO
+//Jiheng.Xie@TECH.BSP.Performance,2019-07-29,add for cpufreq limit info
+#ifdef CONFIG_OPPO_HEALTHINFO
+	/* For get changed freq info */
+	char 			change_comm[TASK_COMM_LEN];
+	unsigned int 	org_max;
+#endif
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 };
 
 /* Only for ACPI */
@@ -429,6 +437,7 @@ static inline void cpufreq_resume(void) {}
 /* Policy Notifiers  */
 #define CPUFREQ_ADJUST			(0)
 #define CPUFREQ_NOTIFY			(1)
+#define CPUFREQ_INCOMPATIBLE	(6)
 
 #ifdef CONFIG_CPU_FREQ
 int cpufreq_register_notifier(struct notifier_block *nb, unsigned int list);
@@ -939,6 +948,10 @@ static inline void sched_cpufreq_governor_change(struct cpufreq_policy *policy,
 			struct cpufreq_governor *old_gov) { }
 #endif
 
+#ifdef VENDOR_EDIT
+struct list_head *get_cpufreq_policy_list(void);
+#endif /* VENDOR_EDIT */
+
 extern void arch_freq_prepare_all(void);
 extern unsigned int arch_freq_get_on_cpu(int cpu);
 
@@ -946,6 +959,10 @@ extern void arch_set_freq_scale(struct cpumask *cpus, unsigned long cur_freq,
 				unsigned long max_freq);
 extern void arch_set_max_freq_scale(struct cpumask *cpus,
 				    unsigned long policy_max_freq);
+
+#ifdef OPLUS_FEATURE_HEALTHINFO
+struct list_head *get_cpufreq_policy_list(void);
+#endif /* OPLUS_FEATURE_HEALTHINFO */
 
 /* the following are really really optional */
 extern struct freq_attr cpufreq_freq_attr_scaling_available_freqs;
@@ -957,4 +974,6 @@ unsigned int cpufreq_generic_get(unsigned int cpu);
 int cpufreq_generic_init(struct cpufreq_policy *policy,
 		struct cpufreq_frequency_table *table,
 		unsigned int transition_latency);
+
+extern unsigned int cpuinfo_max_freq_cached;
 #endif /* _LINUX_CPUFREQ_H */

@@ -187,6 +187,13 @@ struct bio {
 		struct bio_integrity_payload *bi_integrity; /* data integrity */
 #endif
 	};
+#ifdef CONFIG_PFK
+	/* Encryption key to use (NULL if none) */
+	const struct blk_encryption_key	*bi_crypt_key;
+#endif
+#ifdef CONFIG_DM_DEFAULT_KEY
+	int bi_crypt_skip;
+#endif
 
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 
@@ -201,7 +208,9 @@ struct bio {
 	struct bio_vec		*bi_io_vec;	/* the actual vec list */
 
 	struct bio_set		*bi_pool;
-
+#ifdef CONFIG_PFK
+	struct inode		*bi_dio_inode;
+#endif
 	/*
 	 * We can inline a number of vecs at the end of the bio, to avoid
 	 * double allocations for a small number of bio_vecs. This member
@@ -318,16 +327,28 @@ enum req_flag_bits {
 	__REQ_INTEGRITY,	/* I/O includes block integrity payload */
 	__REQ_FUA,		/* forced unit access */
 	__REQ_PREFLUSH,		/* request for cache flush */
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_FG_IO_OPT)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-23,add foreground io opt*/
+	__REQ_UX,
+	__REQ_FG,		/* foreground activity */
+#endif /*VENDOR_EDIT*/
 	__REQ_RAHEAD,		/* read ahead, can fail anytime */
 	__REQ_BACKGROUND,	/* background IO */
 	__REQ_NOWAIT,           /* Don't wait if request will block */
 
+	__REQ_SORTED = __REQ_RAHEAD, /* elevator knows about this request */
+	__REQ_URGENT,		/* urgent request */
 	/* command specific flags for REQ_OP_WRITE_ZEROES: */
 	__REQ_NOUNMAP,		/* do not free blocks when zeroing */
 
 	/* for driver use */
 	__REQ_DRV,
 	__REQ_SWAP,		/* swapping request. */
+	/* Android specific flags */
+	__REQ_NOENCRYPT,	/*
+				 * ok to not encrypt (already encrypted at fs
+				 * level)
+				 */
 	__REQ_NR_BITS,		/* stops here */
 };
 
@@ -337,19 +358,24 @@ enum req_flag_bits {
 #define REQ_SYNC		(1ULL << __REQ_SYNC)
 #define REQ_META		(1ULL << __REQ_META)
 #define REQ_PRIO		(1ULL << __REQ_PRIO)
+#define REQ_URGENT		(1ULL << __REQ_URGENT)
 #define REQ_NOMERGE		(1ULL << __REQ_NOMERGE)
 #define REQ_IDLE		(1ULL << __REQ_IDLE)
 #define REQ_INTEGRITY		(1ULL << __REQ_INTEGRITY)
 #define REQ_FUA			(1ULL << __REQ_FUA)
 #define REQ_PREFLUSH		(1ULL << __REQ_PREFLUSH)
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_FG_IO_OPT)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-23,add foreground io opt*/
+#define REQ_UX			(1ULL << __REQ_UX)
+#define REQ_FG			(1ULL << __REQ_FG)
+#endif /*VENDOR_EDIT*/
 #define REQ_RAHEAD		(1ULL << __REQ_RAHEAD)
 #define REQ_BACKGROUND		(1ULL << __REQ_BACKGROUND)
 #define REQ_NOWAIT		(1ULL << __REQ_NOWAIT)
-
 #define REQ_NOUNMAP		(1ULL << __REQ_NOUNMAP)
-
 #define REQ_DRV			(1ULL << __REQ_DRV)
 #define REQ_SWAP		(1ULL << __REQ_SWAP)
+#define REQ_NOENCRYPT		(1ULL << __REQ_NOENCRYPT)
 
 #define REQ_FAILFAST_MASK \
 	(REQ_FAILFAST_DEV | REQ_FAILFAST_TRANSPORT | REQ_FAILFAST_DRIVER)
@@ -457,5 +483,17 @@ struct blk_rq_stat {
 	u32 nr_samples;
 	u64 batch;
 };
+
+/* geshifei@TECH.Storage.IOMonitor, add for record io history, 2020/03/11 */
+#if defined(VENDOR_EDIT)
+#define IO_HISTORY_DEPTH 32
+struct io_history {
+	unsigned int cmd_flags;
+	unsigned long jiffies;
+};
+
+extern struct io_history io_queue_history[IO_HISTORY_DEPTH];
+extern unsigned char io_queue_index;
+#endif
 
 #endif /* __LINUX_BLK_TYPES_H */

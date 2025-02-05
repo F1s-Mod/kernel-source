@@ -20,6 +20,11 @@
 #include <linux/atomic.h>
 #include <asm/page.h>
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MULTI_KSWAPD)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-22,add multi kswapd support*/
+#include <linux/oppo_multi_kswapd.h>
+#endif /*VENDOR_EDIT*/
+
 /* Free memory management - zoned buddy allocator.  */
 #ifndef CONFIG_FORCE_MAX_ZONEORDER
 #define MAX_ORDER 11
@@ -28,6 +33,10 @@
 #endif
 #define MAX_ORDER_NR_PAGES (1 << (MAX_ORDER - 1))
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+#define FREE_AREA_COUNTS 4
+#endif
 /*
  * PAGE_ALLOC_COSTLY_ORDER is the order at which allocations are deemed
  * costly to service.  That is between allocation orders which should
@@ -40,8 +49,6 @@ enum migratetype {
 	MIGRATE_UNMOVABLE,
 	MIGRATE_MOVABLE,
 	MIGRATE_RECLAIMABLE,
-	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
-	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_CMA
 	/*
 	 * MIGRATE_CMA migration type is designed to mimic the way
@@ -58,6 +65,14 @@ enum migratetype {
 	 */
 	MIGRATE_CMA,
 #endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MEMORY_ISOLATE)
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Add a migrate type to manage special page alloc/free
+ */
+        MIGRATE_OPPO2,
+#endif /* VENDOR_EDIT */
+	MIGRATE_PCPTYPES, /* the number of types on the pcp lists */
+	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_MEMORY_ISOLATION
 	MIGRATE_ISOLATE,	/* can't allocate from here */
 #endif
@@ -70,9 +85,11 @@ extern char * const migratetype_names[MIGRATE_TYPES];
 #ifdef CONFIG_CMA
 #  define is_migrate_cma(migratetype) unlikely((migratetype) == MIGRATE_CMA)
 #  define is_migrate_cma_page(_page) (get_pageblock_migratetype(_page) == MIGRATE_CMA)
+#  define get_cma_migrate_type() MIGRATE_CMA
 #else
 #  define is_migrate_cma(migratetype) false
 #  define is_migrate_cma_page(_page) false
+#  define get_cma_migrate_type() MIGRATE_MOVABLE
 #endif
 
 static inline bool is_migrate_movable(int mt)
@@ -148,6 +165,17 @@ enum zone_stat_item {
 	NR_ZSPAGES,		/* allocated in zsmalloc */
 #endif
 	NR_FREE_CMA_PAGES,
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MEMORY_ISOLATE)
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Account free pages for MIGRATE_OPPO
+ */
+	NR_FREE_OPPO2_PAGES,
+#endif /* VENDOR_EDIT */
+
+#ifdef VENDOR_EDIT
+ /*Huacai.Zhou@PSW.BSP.Kernel.MM, 2018-09-25, add ion cached account*/
+	NR_IONCACHE_PAGES,
+#endif /* VENDOR_EDIT */
 	NR_VM_ZONE_STAT_ITEMS };
 
 enum node_stat_item {
@@ -182,6 +210,7 @@ enum node_stat_item {
 	NR_DIRTIED,		/* page dirtyings since bootup */
 	NR_WRITTEN,		/* page writings since bootup */
 	NR_INDIRECTLY_RECLAIMABLE_BYTES, /* measured in bytes */
+	NR_UNRECLAIMABLE_PAGES,
 	NR_VM_NODE_STAT_ITEMS
 };
 
@@ -268,9 +297,10 @@ enum zone_watermarks {
 	NR_WMARK
 };
 
-#define min_wmark_pages(z) (z->watermark[WMARK_MIN])
-#define low_wmark_pages(z) (z->watermark[WMARK_LOW])
-#define high_wmark_pages(z) (z->watermark[WMARK_HIGH])
+#define min_wmark_pages(z) (z->_watermark[WMARK_MIN] + z->watermark_boost / 2)
+#define low_wmark_pages(z) (z->_watermark[WMARK_LOW] + z->watermark_boost / 2)
+#define high_wmark_pages(z) (z->_watermark[WMARK_HIGH] + z->watermark_boost)
+#define wmark_pages(z, i) (z->_watermark[i] + (((i) == WMARK_HIGH) ? (z->watermark_boost) : (z->watermark_boost / 2)))
 
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
@@ -357,14 +387,29 @@ enum zone_type {
 
 #ifndef __GENERATING_BOUNDS_H
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+struct page_label {
+    unsigned long label;
+    unsigned long segment;
+};
+#endif
+
+
 struct zone {
 	/* Read-mostly fields */
 
 	/* zone watermarks, access with *_wmark_pages(zone) macros */
-	unsigned long watermark[NR_WMARK];
+	unsigned long _watermark[NR_WMARK];
+	unsigned long watermark_boost;
 
 	unsigned long nr_reserved_highatomic;
-
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MEMORY_ISOLATE)
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Number of MIGRATE_OPPO page block.
+ */
+	unsigned long nr_migrate_oppo2_block;
+#endif /* VENDOR_EDIT */
 	/*
 	 * We don't know if the memory that we're going to allocate will be
 	 * freeable or/and it will be released eventually, so to avoid totally
@@ -381,6 +426,10 @@ struct zone {
 #endif
 	struct pglist_data	*zone_pgdat;
 	struct per_cpu_pageset __percpu *pageset;
+
+#ifdef CONFIG_CMA
+	bool			cma_alloc;
+#endif
 
 #ifndef CONFIG_SPARSEMEM
 	/*
@@ -437,7 +486,10 @@ struct zone {
 	unsigned long		managed_pages;
 	unsigned long		spanned_pages;
 	unsigned long		present_pages;
-
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+    struct page_label zone_label[FREE_AREA_COUNTS];
+#endif
 	const char		*name;
 
 #ifdef CONFIG_MEMORY_ISOLATION
@@ -460,7 +512,12 @@ struct zone {
 	ZONE_PADDING(_pad1_)
 
 	/* free areas of different sizes */
+#if defined(VENDOR_EDIT) && defined(CONFIG_PHYSICAL_ANTI_FRAGMENTATION)
+//Peifeng.Li@PSW.Kernel.BSP.Memory, 2020/04/22, multi-freearea
+	struct free_area	free_area[FREE_AREA_COUNTS][MAX_ORDER];
+#else
 	struct free_area	free_area[MAX_ORDER];
+#endif
 
 	/* zone flags, see below */
 	unsigned long		flags;
@@ -483,6 +540,8 @@ struct zone {
 	unsigned long		compact_cached_free_pfn;
 	/* pfn where async and sync compaction migration scanner should start */
 	unsigned long		compact_cached_migrate_pfn[2];
+	unsigned long		compact_init_migrate_pfn;
+	unsigned long		compact_init_free_pfn;
 #endif
 
 #ifdef CONFIG_COMPACTION
@@ -521,6 +580,12 @@ enum pgdat_flags {
 					 * many pages under writeback
 					 */
 	PGDAT_RECLAIM_LOCKED,		/* prevents concurrent reclaim */
+};
+
+enum zone_flags {
+	ZONE_BOOSTED_WATERMARK,		/* zone recently boosted watermarks.
+					 * Cleared when kswapd is woken.
+					 */
 };
 
 static inline unsigned long zone_end_pfn(const struct zone *zone)
@@ -656,8 +721,13 @@ typedef struct pglist_data {
 	int node_id;
 	wait_queue_head_t kswapd_wait;
 	wait_queue_head_t pfmemalloc_wait;
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_MULTI_KSWAPD)
+/*Huacai.Zhou@Tech.Kernel.MM, 2020-03-22,add multi kswapd support*/
+	struct task_struct *kswapd[MAX_KSWAPD_THREADS];
+#else
 	struct task_struct *kswapd;	/* Protected by
 					   mem_hotplug_begin/end() */
+#endif /*VENDOR_EDIT*/
 	int kswapd_order;
 	enum zone_type kswapd_classzone_idx;
 
@@ -868,7 +938,7 @@ static inline int is_highmem_idx(enum zone_type idx)
 }
 
 /**
- * is_highmem - helper function to quickly check if a struct zone is a 
+ * is_highmem - helper function to quickly check if a struct zone is a
  *              highmem zone or not.  This is an attempt to keep references
  *              to ZONE_{DMA/NORMAL/HIGHMEM/etc} in general code to a minimum.
  * @zone - pointer to struct zone variable
@@ -885,6 +955,8 @@ static inline int is_highmem(struct zone *zone)
 /* These two functions are used to setup the per zone pages min values */
 struct ctl_table;
 int min_free_kbytes_sysctl_handler(struct ctl_table *, int,
+					void __user *, size_t *, loff_t *);
+int watermark_boost_factor_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
 int watermark_scale_factor_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);

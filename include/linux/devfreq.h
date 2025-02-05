@@ -149,6 +149,7 @@ struct devfreq {
 	struct list_head node;
 
 	struct mutex lock;
+	struct mutex event_lock;
 	struct device dev;
 	struct devfreq_dev_profile *profile;
 	const struct devfreq_governor *governor;
@@ -174,6 +175,7 @@ struct devfreq {
 	unsigned long last_stat_updated;
 
 	struct srcu_notifier_head transition_notifier_list;
+	bool dev_suspended;
 };
 
 struct devfreq_freqs {
@@ -226,6 +228,12 @@ extern void devm_devfreq_unregister_notifier(struct device *dev,
 extern struct devfreq *devfreq_get_devfreq_by_phandle(struct device *dev,
 						int index);
 
+#ifdef VENDOR_EDIT
+//cuixiaogang@SRC.hypnus.2018-04-05. add support to set devfreq limit
+extern int devfreq_set_limit(struct devfreq *df, unsigned long min, unsigned long max);
+extern int devfreq_get_limit(struct devfreq *df, unsigned long *min, unsigned long *max);
+#endif
+
 #if IS_ENABLED(CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND)
 /**
  * struct devfreq_simple_ondemand_data - void *data fed to struct devfreq
@@ -236,6 +244,9 @@ extern struct devfreq *devfreq_get_devfreq_by_phandle(struct device *dev,
  *			the governor may consider slowing the frequency down.
  *			Specify 0 to use the default. Valid value = 0 to 100.
  *			downdifferential < upthreshold must hold.
+ * @simple_scaling:	Setting this flag will scale the clocks up only if the
+ *			load is above @upthreshold and will scale the clocks
+ *			down only if the load is below @downdifferential.
  *
  * If the fed devfreq_simple_ondemand_data pointer is NULL to the governor,
  * the governor uses the default values.
@@ -243,6 +254,7 @@ extern struct devfreq *devfreq_get_devfreq_by_phandle(struct device *dev,
 struct devfreq_simple_ondemand_data {
 	unsigned int upthreshold;
 	unsigned int downdifferential;
+	unsigned int simple_scaling;
 };
 #endif
 
@@ -384,6 +396,19 @@ static inline int devfreq_update_stats(struct devfreq *df)
 {
 	return -EINVAL;
 }
+
+#ifdef VENDOR_EDIT
+//cuixiaogang@SRC.hypnus.2018-04-05. add support to set devfreq limit
+static inline int devfreq_set_limit(struct devfreq *df, unsigned long min, unsigned long max)
+{
+	return -EINVAL;
+}
+
+static inline int devfreq_get_limit(struct devfreq *df, unsigned long *min, unsigned long *max)
+{
+	return -EINVAL;
+}
+#endif /* VENDOR_EDIT */
 #endif /* CONFIG_PM_DEVFREQ */
 
 #endif /* __LINUX_DEVFREQ_H__ */

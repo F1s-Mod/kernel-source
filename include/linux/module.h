@@ -20,6 +20,7 @@
 #include <linux/export.h>
 #include <linux/rbtree_latch.h>
 #include <linux/error-injection.h>
+#include <linux/cfi.h>
 #include <linux/tracepoint-defs.h>
 #include <linux/cfi.h>
 
@@ -684,6 +685,23 @@ static inline bool __is_module_percpu_address(unsigned long addr, unsigned long 
 }
 
 static inline bool is_module_text_address(unsigned long addr)
+{
+	return false;
+}
+
+static inline bool within_module_core(unsigned long addr,
+				      const struct module *mod)
+{
+	return false;
+}
+
+static inline bool within_module_init(unsigned long addr,
+				      const struct module *mod)
+{
+	return false;
+}
+
+static inline bool within_module(unsigned long addr, const struct module *mod)
 {
 	return false;
 }
